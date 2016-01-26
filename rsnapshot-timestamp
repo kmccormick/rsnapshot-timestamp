@@ -1,0 +1,196 @@
+#!/bin/bash
+# rsnapshot-timestamp: a wrapper around rsnapshot that uses timestamp-named
+# directories instead of rsnapshot's rotating daily.0 daily.1 etc.
+
+### rsnapshot's options do double-duty
+# rsnapshot-timestamp understands and uses -t & -c options
+# All options, including -t & -c, are then passed on to rsnapshot
+# Defaults are sensible, and should be same as rsnapshot's defaults
+config=/etc/rsnapshot.conf	# -c
+testmode=false			# -t
+date_format="%F--%H-%M-%S"	# TODO: configurable date format
+while getopts ":c:t" opt ; do
+	case $opt in
+		c)
+			config="$OPTARG"
+			;;
+		t)
+			testmode=true
+			;;
+		\?)
+			# Ignore unrecognized options
+			echo "Unrecognized option: -$OPTARG" >&2
+			;;
+		:)
+			echo "Option -$OPTARG requires an argument." >&2
+			;;
+		*)
+			echo "weird getopts stuff" >&2
+			;;
+	esac
+done
+
+# get_config: retreive a specific value from rsnapshot.conf
+function get_config() {
+	sed -n "s/^$1[\\t]\\+\\(.*\\)/\\1/p" "$config"
+}
+
+# log_err: log error message to syslog and stderr
+function log_err() {
+	logger -p err -st "$(basename "$0")" "ERROR: $@"
+}
+
+# oldest_snap_since: print the oldest snapshot made after the given time
+function oldest_snap_since() {
+	start_time="$1"
+	find "$snapshot_root" -mindepth 1 -maxdepth 1 -type d ! -name .sync \
+		-newermt "$start_time" -printf "%T@\t%p\n" \
+		| sort -n | head -n1 | cut -f2
+}
+
+# get_start: For the given period type, get the start of the current period
+function get_start() {
+	case "$1" in
+		hours)	date -Ihours	;;
+		days)	date -I		;;
+		months)	date +%Y-%m-01	;;
+		years)	date +%Y-01-01	;;
+		weeks)
+			firstdayofweek="$(locale day | cut -f1 -d\;)"
+			date -I -d "$firstdayofweek 1 weeks ago"
+			;;
+		*)
+			log_err "period $1 not supported"
+			echo unsupported
+			;;
+	esac
+}
+
+### Before handing off to rsnapshot, do some sanity checking
+
+# Ensure the config_version is 1.2
+# Supporting other versions is probably trivial, just untested
+config_version="$(get_config config_version)"
+if [[ $config_version != 1.2 ]] ; then
+	log_err "config_version $config_version not supported"
+	exit 1
+fi
+if [[ $(get_config link_dest) = 1 ]] ; then
+	log_err "link_dest is not supported"
+	exit 1
+fi
+if [[ $(get_config sync_first) != 1 ]] ; then
+	log_err "sync_first is required"
+	exit 1
+fi
+
+# TODO: Ensure 'sync' is in the arg list
+
+### Run rsnapshot
+echo rsnapshot "$@"
+rsnapshot "$@"
+result=$?
+
+if [[ $result -ne 0 ]] ; then
+	log_err "rsnapshot returned $result; exiting. Args: $@"
+	exit $result
+fi
+
+### Re-use rsnapshot's lockfile, if configured
+if ! $testmode ; then
+	lockfile="$(get_config lockfile)"
+	if [[ -n $lockfile ]] ; then
+		if [[ -e $lockfile ]] ; then
+			# ensure lockfile only contains a pid
+			if [[ $(wc -l < "$lockfile") -ne 1 ]] || grep -v "^[0-9]\\+$" "$lockfile" ; then
+				log_err "lockfile $lockfile contains invalid contents"
+				exit 1
+			fi
+			# exit if process is still running
+			pid="$(cat "$lockfile")"
+			if kill -0 $pid 2>/dev/null ; then
+				log_err "PID $pid from lockfile $lockfile still running"
+				exit 1
+			fi
+			# remove stale lockfile
+			rm -f "$lockfile"
+		fi
+
+		# create new lockfile and set trap to remove it automatically
+		if echo $$ > $lockfile ; then
+			trap "echo trap; rm -f $lockfile" EXIT
+		else
+			log_err "Could not create lockfile $lockfile"
+			exit 1
+		fi
+	fi
+fi
+
+### Create timestamp directories from .sync
+snapshot_root="$(get_config snapshot_root)"
+rsnapshot_cp="$(get_config cmd_cp)"
+cmd_cp="${rsnapshot_cp:-/bin/cp}"
+
+if [[ -d ${snapshot_root}.sync ]] ; then
+	dest="${snapshot_root}$(date --reference "${snapshot_root}.sync" +$date_format)"
+	if ! $testmode ; then
+		if [[ -d $dest ]] ; then
+			log_err "snapshot $dest already exists"
+			exit 1
+		fi
+		$cmd_cp -al "${snapshot_root}.sync" "$dest"
+		touch --reference="${snapshot_root}.sync" "$dest"
+	else
+		echo "$cmd_cp -al ${snapshot_root}.sync $dest"
+	fi
+else
+	log_err "${snapshot_root}.sync does not exist"
+	exit 1
+fi
+
+### Cleanup old snapshots
+
+# get periods and retention settings from rsnapshot.conf
+declare -A periods
+while read period keep ; do
+	periods[$period]=$keep
+done < <(get_config retain)
+
+# save the name of snapshots to keep
+declare -A keep_snaps
+
+# iterate over each retain period type and build a list of snapshots to keep
+for period in "${!periods[@]}" ; do
+
+	# get the start of the current period
+	current="$(get_start "$period")"
+	[[ $current = unsupported ]] && exit 1
+
+	# count backwards in time for the number of periods to retain
+	# then keep the next newer snapshot since that point in time
+	for num in $(seq 0 "${periods[$period]}") ; do
+		# TODO: does daylight time cause issues? will UTC fix those issues?
+		start_date=$(date --rfc-3339=seconds -d "$current $num $period ago")
+		snapshot="$(oldest_snap_since "$start_date")"
+		[[ -d $snapshot ]] && keep_snaps[$snapshot]=keep
+	done
+done
+
+# any snapshots that aren't flagged to keep can be removed
+declare -a rm_snaps
+for snapshot in "$snapshot_root"* ; do
+	for keep in ${!keep_snaps[@]} ; do
+		[[ $snapshot = $keep ]] && continue 2
+	done
+	rm_snaps+=( "$snapshot" )
+done
+
+rsnapshot_rm="$(get_config cmd_rm)"
+cmd_rm="${rsnapshot_rm:-/bin/rm}"
+for snapshot in "${rm_snaps[@]}" ; do
+	if ! $testmode ; then
+		echo $cmd_rm -rf "$snapshot"
+	else
+		echo "$cmd_rm -rf $snapshot"
+	fi
+done
