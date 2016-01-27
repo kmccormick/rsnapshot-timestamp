@@ -3,19 +3,23 @@
 # directories instead of rsnapshot's rotating daily.0 daily.1 etc.
 
 ### rsnapshot's options do double-duty
-# rsnapshot-timestamp understands and uses -t & -c options
-# All options, including -t & -c, are then passed on to rsnapshot
+# rsnapshot-timestamp understands and uses -t, -v, & -c options
+# All options (including -t, -v, & -c) are then passed on to rsnapshot
 # Defaults are sensible, and should be same as rsnapshot's defaults
 config=/etc/rsnapshot.conf	# -c
 testmode=false			# -t
+verbose=false			# -v
 date_format="%F--%H-%M-%S"
-while getopts ":c:t" opt ; do
+while getopts ":c:tv" opt ; do
 	case $opt in
 		c)
 			config="$OPTARG"
 			;;
 		t)
 			testmode=true
+			;;
+		v)
+			verbose=true
 			;;
 		\?)
 			# Ignore unrecognized options
@@ -84,6 +88,9 @@ if [[ $(get_config sync_first) != 1 ]] ; then
 	exit 1
 fi
 
+# let config file set verbose also
+[[ $(get_config verbose) -gt 2 ]] && verbose=true
+
 ### Run rsnapshot
 echo rsnapshot "$@"
 rsnapshot "$@"
@@ -131,6 +138,10 @@ cmd_cp="${rsnapshot_cp:-/bin/cp}"
 
 if [[ -d ${snapshot_root}.sync ]] ; then
 	dest="${snapshot_root}$(date --reference "${snapshot_root}.sync" +$date_format)"
+	if $testmode || $verbose ; then
+		echo "$cmd_cp -al ${snapshot_root}.sync $dest"
+		echo "touch --reference=${snapshot_root}.sync $dest"
+	fi
 	if ! $testmode ; then
 		if [[ -d $dest ]] ; then
 			log_err "snapshot $dest already exists"
@@ -138,8 +149,6 @@ if [[ -d ${snapshot_root}.sync ]] ; then
 		fi
 		$cmd_cp -al "${snapshot_root}.sync" "$dest"
 		touch --reference="${snapshot_root}.sync" "$dest"
-	else
-		echo "$cmd_cp -al ${snapshot_root}.sync $dest"
 	fi
 else
 	log_err "${snapshot_root}.sync does not exist"
@@ -185,9 +194,10 @@ done
 rsnapshot_rm="$(get_config cmd_rm)"
 cmd_rm="${rsnapshot_rm:-/bin/rm}"
 for snapshot in "${rm_snaps[@]}" ; do
+	if $testmode || $verbose ; then
+		echo "$cmd_rm -rf $snapshot"
+	fi
 	if ! $testmode ; then
 		echo $cmd_rm -rf "$snapshot"
-	else
-		echo "$cmd_rm -rf $snapshot"
 	fi
 done

@@ -17,9 +17,9 @@ Rsnapshot wrapper using timestamps as snapshot directory names
   * Remove longer duration `rsnapshot` calls
 
 ## Usage
-    rsnapshot-timestamp [-c config] [-t] [rsnapshot_options] sync
+    rsnapshot-timestamp [-vt] [-c cfgfile] [rsnapshot_options] sync
 
-`rsnapshot-timestamp` passes the entire argument string on to `rsnapshot`. Just call it exactly like you would `rsnapshot`, but ONLY ever with `sync` as the last parameter. `rsnapshot-timestamp` understands `rsnapshot`'s `-c` and `-t` options, and uses them in the same way `rsnapshot` does.
+`rsnapshot-timestamp` passes the entire argument string on to `rsnapshot`. Just call it exactly like you would `rsnapshot`, but ONLY ever with `sync` as the last parameter. `rsnapshot-timestamp` understands `rsnapshot`'s `-c`, `-t`, and `-v` options, and uses them in the same way `rsnapshot` does.
 
 ## Example rsnapshot.conf
     config_version	1.2
