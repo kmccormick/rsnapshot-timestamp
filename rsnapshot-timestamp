@@ -8,7 +8,7 @@
 # Defaults are sensible, and should be same as rsnapshot's defaults
 config=/etc/rsnapshot.conf	# -c
 testmode=false			# -t
-date_format="%F--%H-%M-%S"	# TODO: configurable date format
+date_format="%F--%H-%M-%S"
 while getopts ":c:t" opt ; do
 	case $opt in
 		c)
@@ -83,8 +83,6 @@ if [[ $(get_config sync_first) != 1 ]] ; then
 	log_err "sync_first is required"
 	exit 1
 fi
-
-# TODO: Ensure 'sync' is in the arg list
 
 ### Run rsnapshot
 echo rsnapshot "$@"
@@ -169,7 +167,6 @@ for period in "${!periods[@]}" ; do
 	# count backwards in time for the number of periods to retain
 	# then keep the next newer snapshot since that point in time
 	for num in $(seq 0 "${periods[$period]}") ; do
-		# TODO: does daylight time cause issues? will UTC fix those issues?
 		start_date=$(date --rfc-3339=seconds -d "$current $num $period ago")
 		snapshot="$(oldest_snap_since "$start_date")"
 		[[ -d $snapshot ]] && keep_snaps[$snapshot]=keep
