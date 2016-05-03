@@ -198,6 +198,6 @@ for snapshot in "${rm_snaps[@]}" ; do
 		echo "$cmd_rm -rf $snapshot"
 	fi
 	if ! $testmode ; then
-		echo $cmd_rm -rf "$snapshot"
+		$cmd_rm -rf "$snapshot"
 	fi
 done
